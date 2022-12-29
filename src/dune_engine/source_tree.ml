@@ -49,6 +49,8 @@ module Dune_file = struct
 
   let alternative_fname = "dune-file"
 
+  let workspace_fname = "dune-workspace"
+
   type kind =
     | Plain
     | Ocaml_script
@@ -106,7 +108,11 @@ module Dune_file = struct
     let contents = Sub_dirs.Dir_map.root active in
     { Plain.contents; for_subdirs = active }
 
-  let load file ~from_parent ~project =
+  let load_content file ~from_parent ~project =
+    let () = Printf.eprintf "[LOAD_CONTENT] from %s\n"
+               (match file with
+                | None -> "XXX"
+                | Some path -> Path.Local_gen.to_string path) in
     let+ kind, plain =
       let load_plain = load_plain ~file ~from_parent ~project in
       match file with
@@ -126,6 +132,10 @@ module Dune_file = struct
         let+ ast = load_plain ast in
         (kind, ast)
     in
+    (kind, plain)
+
+  let load file ~from_parent ~project =
+    let+ kind, plain = load_content file ~from_parent ~project in
     { path = file; kind; plain }
 end
 
@@ -532,7 +542,15 @@ end = struct
       | Warn -> Memo.exec memo (`Is_error false, inp)
       | Error -> Memo.exec memo (`Is_error true, inp)
 
+  (*
+dir_status:Sub_dirs.Status.t ->
+path:Path.Source.t ->
+files:Import.String.Set.t ->
+project:Dune_project.t -> Dune_file.t option Memo.t
+   *)
   let dune_file ~(dir_status : Sub_dirs.Status.t) ~path ~files ~project =
+    let () = Printf.eprintf "[dune_file] ENTER\n" in
+    (* Try to locate a `dune` file in the current path *)
     let file =
       if dir_status = Data_only then None
       else if
@@ -542,6 +560,16 @@ end = struct
       else if String.Set.mem files Dune_file.fname then Some Dune_file.fname
       else None
     in
+    (* Try to locate a `dune-workspace` file in the current path *)
+    let workspace_file =
+      if dir_status = Data_only then None
+      else if String.Set.mem files Dune_file.workspace_fname
+      then Some Dune_file.workspace_fname
+      else None
+    in
+    (*
+       (Path.Source.t option * Sub_dirs.Dir_map.t) option
+     *)
     let* from_parent =
       match Path.Source.parent path with
       | None -> Memo.return None
@@ -556,7 +584,22 @@ end = struct
         in
         (dune_file.path, dir_map)
     in
+    (*(Dune_file.kind * Dune_file.Plain.t) option Memo.t *)
+    let* from_workspace =
+      let workspace_file = Option.map workspace_file ~f:(Path.Source.relative path) in
+      let+ (_kind, ws_sub_dirs) = Dune_file.load_content workspace_file
+                                   ~project ~from_parent:None in
+      Some ws_sub_dirs.for_subdirs
+    in
+    let from_parent =
+      match (from_parent, from_workspace) with
+      | _, None -> from_parent
+      | None, Some from_workspace -> Some (None, from_workspace)
+      | Some (path, p_dirs), Some (w_dirs) ->
+        Some (path, Sub_dirs.Dir_map.merge p_dirs w_dirs)
+    in
     let open Memo.O in
+    let r =
     match (from_parent, file) with
     | None, None -> Memo.return None
     | _, _ ->
@@ -565,15 +608,43 @@ end = struct
       let from_parent = Option.map from_parent ~f:snd in
       let+ dune_file = Dune_file.load file ~project ~from_parent in
       Some dune_file
+    in
+    let () = Printf.eprintf "[dune_file] EXIT\n" in r
 
   let contents { Readdir.path; dirs; files } ~dirs_visited ~project
       ~(dir_status : Sub_dirs.Status.t) =
+    let () = Printf.eprintf "IN contents:\n";
+      Printf.eprintf "- path = %s\n" (Path.Local_gen.to_string path);
+      List.iter dirs ~f:(fun (s, p, _f) ->
+        Printf.eprintf "- dir entry: %s, %s\n"
+          s (Path.Local_gen.to_string p));
+      String.Set.iter files ~f:(fun s ->
+        Printf.eprintf "- file entry: %s\n" s);
+      Printf.eprintf "- dir status: %s\n" (
+        match dir_status with
+        | Data_only -> "Data_only"
+        | Normal -> "Normal"
+        | Vendored -> "Vendored");
+      Printf.eprintf "- dune project name: %s\n"
+        (Dune_project.Name.to_string_hum @@ Dune_project.name project);
+      Printf.eprintf "- dune project root: %s\n"
+        (Path.Local_gen.to_string @@ Dune_project.root project)
+    in
     let+ dune_file = dune_file ~dir_status ~files ~project ~path in
+    let () = Printf.eprintf "- dune file = %s\n"
+               (match dune_file with
+                | Some { path = Some path; _ } -> Path.Local_gen.to_string path
+                | _ -> "XXX")
+    in
+    (* Predicate_lang.Glob.t Sub_dirs.Status.Map.t *)
     let sub_dirs = Dune_file.sub_dirs dune_file in
     let dirs_visited, sub_dirs =
       Get_subdir.all ~dirs_visited ~dirs ~sub_dirs ~parent_status:dir_status
         ~dune_file ~path
     in
+    let () = String.Map.iteri sub_dirs
+               ~f:(fun name _ -> Printf.eprintf "- subdir detected:  %s\n"
+                                   name) in
     (Dir0.Contents.create ~files ~sub_dirs ~dune_file, dirs_visited)
 
   let get_vcs ~default:vcs ~readdir:{ Readdir.path; files; dirs } =
@@ -621,6 +692,7 @@ end = struct
     { Output.dir; visited }
 
   let find_dir_raw_impl path : Dir0.t Output.t option Memo.t =
+    let () = Printf.eprintf "find_dir_raw_impl\n" in
     match Path.Source.parent path with
     | None ->
       let+ root = root () in
@@ -692,10 +764,14 @@ end = struct
     | Some { Output.dir; visited = _ } -> Some dir
     | None -> None
 
-  let root () = find_dir Path.Source.root >>| Option.value_exn
+  let root () =
+    let () = Printf.eprintf "SOURCE_TREE.MEMOIZED.root\n" in
+    find_dir Path.Source.root >>| Option.value_exn
 end
 
-let root () = Memoized.root ()
+let root () =
+  let () = Printf.eprintf "SOURCE_TREE.root\n" in
+  Memoized.root ()
 
 let find_dir path = Memoized.find_dir path
 

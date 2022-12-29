@@ -257,7 +257,7 @@ let strict_subdir_glob field_name =
   in
   Predicate_lang.union globs
 
-let decode =
+let decode_raw =
   let open Dune_lang.Decoder in
   let ignored_sub_dirs =
     let ignored =
@@ -406,4 +406,4 @@ let decode ~file (decoder : decoder) sexps =
   let+ sexps =
     decode_includes ~context:(Include_stanza.in_file file) decoder sexps
   in
-  decoder.decode sexps decode
+  decoder.decode sexps decode_raw

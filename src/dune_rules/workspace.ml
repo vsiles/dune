@@ -530,7 +530,8 @@ let step1 clflags =
          ~default:(lazy []))
   and+ config_from_workspace_file =
     Dune_config.decode_fields_of_workspace_file
-  in
+  and+ _sub_dirs = field "dirs" (lazy_ Sub_dirs.decode_raw)
+    ~default:(lazy Sub_dirs.Dir_map.empty) in
   let+ contexts = multi_field "context" (lazy_ Context.t) in
   let config =
     create_final_config ~config_from_workspace_file ~config_from_config_file

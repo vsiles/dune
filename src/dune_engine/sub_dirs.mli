@@ -74,6 +74,8 @@ module Dir_map : sig
   val root : t -> per_dir
 end
 
+val decode_raw : Dir_map.t Dune_lang.Decoder.t
+
 type decoder =
   { decode : 'a. Dune_lang.Ast.t list -> 'a Dune_lang.Decoder.t -> 'a }
 
